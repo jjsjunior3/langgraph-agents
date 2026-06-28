@@ -2,59 +2,56 @@ import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__))))
 
-from tools.busca import busca_agêntica, busca_regular
-from tools.scraping import pesquisar_restaurantes
+from langchain_core.messages import HumanMessage
+from langchain_tavily import TavilySearch
+from agents.persistent_agent import criar_agente_persistente
 
 
-def demo_busca_agêntica():
-    print("\n🤖 BUSCA AGÊNTICA (Tavily)")
-    print("=" * 60)
-    query = "O que são multiagentes de Inteligência Artificial?"
-    print(f"Query: {query}\n")
-    from tools.busca import busca_agêntica
-    print(f"Resposta: {busca_agêntica(query)}")
+def stream_pergunta(agent, pergunta: str, thread_id: str):
+    """Executa uma pergunta com streaming e exibe cada nó."""
+    print(f"\n📩 Pergunta: {pergunta}")
+    print(f"🧵 Thread: {thread_id}")
+    print("-" * 50)
+
+    thread = {"configurable": {"thread_id": thread_id}}
+    messages = [HumanMessage(content=pergunta)]
+    resposta_final = ""
+
+    for event in agent.graph.stream({"messages": messages}, thread):
+        for no, dados in event.items():
+            if no == "llm":
+                conteudo = dados['messages'][-1].content
+                if conteudo:
+                    resposta_final = conteudo
+                    print(f"🤖 [{no}]: {conteudo[:300]}...")
+            elif no == "action":
+                print(f"⚙️  [{no}]: ferramenta executada")
+
+    return resposta_final
 
 
-def demo_busca_regular():
-    print("\n🔍 BUSCA REGULAR (DuckDuckGo)")
-    print("=" * 60)
-    from tools.busca import busca_regular
-    cidade = "Belém"
-    query = f"5 principais restaurantes em {cidade} TripAdvisor avaliação preço"
-    print(f"Buscando restaurantes em {cidade}...\n")
-    links = busca_regular(query)
-    for i, link in enumerate(links, 1):
-        print(f"  {i}. {link}")
-    print("\n⚠️  Apenas URLs — sem conteúdo extraído.")
+def demo_persistencia():
+    """
+    Demonstra como o thread_id mantém contexto entre perguntas.
+    """
+    tavily = TavilySearch(max_results=3)
+    agent = criar_agente_persistente(tools=[tavily])
 
+    print("\n" + "="*60)
+    print("🧠 DEMO: PERSISTÊNCIA COM THREAD")
+    print("="*60)
 
-def demo_scraping():
-    print("\n🕷️  PIPELINE COMPLETO (Tavily + Selenium + BeautifulSoup)")
-    print("=" * 60)
-    cidade = "Belém do Pará"
-    restaurantes = pesquisar_restaurantes(cidade, top_n=5)
+    # Thread 1 — conversa com contexto acumulado
+    stream_pergunta(agent, "Como estava o tempo em São Paulo ontem?", thread_id="1")
+    stream_pergunta(agent, "E no Rio de Janeiro?", thread_id="1")
+    stream_pergunta(agent, "Qual das duas cidades estava mais quente?", thread_id="1")
 
-    if restaurantes:
-        print(f"\n🍽️  Top restaurantes em {cidade}:\n")
-        for i, r in enumerate(restaurantes, 1):
-            print(f"--- #{i} {r['Nome']} ---")
-            print(f"  ⭐ Avaliação : {r['Avaliação']}")
-            print(f"  💬 Reviews   : {r['Reviews']}")
-            print(f"  💰 Preço     : {r['Preço']}")
-            print(f"  🍴 Culinária : {r['Culinária']}")
-            print(f"  🔗 Link      : {r['Link']}")
-            print()
-    else:
-        print("⚠️  Nenhum restaurante extraído.")
-        print("💡 O TripAdvisor pode ter bloqueado o scraping.")
-        print("   Isso é normal — sites protegem seus dados.")
-
-
-def main():
-    demo_busca_agêntica()
-    demo_busca_regular()
-    demo_scraping()  # pode comentar se o TripAdvisor bloquear
+    # Thread 2 — nova sessão, sem contexto
+    print("\n" + "="*60)
+    print("🔄 NOVA THREAD — sem contexto anterior")
+    print("="*60)
+    stream_pergunta(agent, "Qual estava mais quente?", thread_id="2")
 
 
 if __name__ == "__main__":
-    main()
+    demo_persistencia()
