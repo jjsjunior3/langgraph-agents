@@ -23,12 +23,10 @@ load_dotenv()
 def build_prompt() -> str:
     current_date = date.today().strftime("%d/%m/%Y")
     return f"""Você é um assistente de pesquisa inteligente e altamente atualizado.
-Sua principal prioridade é encontrar informações RECENTES e em TEMPO REAL sempre que possível.
 A data atual é {current_date}.
 Ao buscar sobre o tempo ou eventos que se referem a "hoje" ou "agora",
-inclua a data atual {current_date} na sua consulta para a ferramenta de busca.
+inclua a data atual {current_date} na sua consulta.
 Use o mecanismo de busca para procurar informações.
-Você tem permissão para fazer múltiplas chamadas em sequência.
 Responda sempre em português."""
 
 
@@ -49,7 +47,7 @@ class HITLAgent:
 
         self.graph = graph.compile(
             checkpointer=checkpointer,
-            interrupt_before=["action"]  # ← ponto de interrupção
+            interrupt_before=["action"]
         )
         self.tools = {t.name: t for t in tools}
         self.model = model.bind_tools(tools)
@@ -77,6 +75,42 @@ class HITLAgent:
             ))
         print("✅ Retornando ao modelo...")
         return {'messages': results}
+
+    def injetar_resposta(self, thread: dict, resposta: str) -> str:
+        """
+        Injeta uma resposta manual no estado do agente,
+        substituindo o que ele planejava buscar/responder.
+        Retorna a resposta injetada como confirmação.
+        """
+        snapshot = self.graph.get_state(thread)
+        if not snapshot:
+            return "❌ Snapshot não encontrado."
+
+        # Cria a mensagem injetada
+        mensagem_injetada = AIMessage(
+            content=resposta,
+            id=str(uuid.uuid4())
+        )
+
+        # Modifica o estado substituindo a última AIMessage
+        estado_modificado = snapshot.values.copy()
+        msgs = estado_modificado.get("messages", [])
+
+        substituiu = False
+        for i, msg in enumerate(msgs):
+            if isinstance(msg, AIMessage):
+                msgs[i] = mensagem_injetada
+                substituiu = True
+                break
+
+        if not substituiu:
+            msgs.append(mensagem_injetada)
+
+        estado_modificado["messages"] = msgs
+
+        # Atualiza o estado do grafo
+        self.graph.update_state(thread, estado_modificado)
+        return resposta
 
 
 def criar_hitl_agent(tools: list) -> HITLAgent:
