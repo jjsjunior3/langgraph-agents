@@ -1,8 +1,14 @@
 # 🤖 LangGraph Agents
 
-Projeto de estudo e portfólio desenvolvido durante o curso **LangGraph: Orquestrando agentes e multiagentes** da Alura.
+Projeto de estudo e portfólio desenvolvido durante o curso **LangGraph: Orquestrando agentes e multiagentes** da Alura, parte da trilha **Engenharia de Agentes de IA**.
 
-Demonstra a evolução da construção de agentes de IA — desde a implementação manual do padrão **ReAct** até a orquestração declarativa com **LangGraph**, utilizando o modelo **Gemini 2.5 Flash** via **OpenRouter**.
+Demonstra a evolução da construção de agentes de IA — desde a implementação manual do padrão **ReAct** até a orquestração de múltiplos agentes com **LangGraph**, com interface web via **Gradio**.
+
+---
+
+## 🖥️ Interface
+
+![Interface Gradio](docs/gradio_interface.png)
 
 ---
 
@@ -19,29 +25,42 @@ Implementação do padrão **ReAct (Reasoning + Acting)** do zero, sem framework
 | `calcular_valor_total_lista` | Calcula o total de uma lista de itens |
 
 ### Agente 2 — LangGraph + Tavily (Pesquisa Web)
-Agente de pesquisa geral com busca em tempo real, construído com **LangGraph**. Suporta:
+Agente de pesquisa geral com busca em tempo real. Suporta:
 - Chamadas **simples** (uma busca)
 - Chamadas **paralelas** (múltiplas buscas simultâneas)
 - Chamadas **sequenciais** (buscas dependentes entre si)
 
+### Agente 3 — Persistência e Streaming
+Agente com **memória entre conversas** usando SQLite como checkpointer. Cada `thread_id` mantém um contexto independente e persistente.
+
+### Agente 4 — Human in the Loop (HITL)
+Agente com **aprovação humana** antes de executar ações, e suporte a **injeção manual de respostas** no estado do grafo.
+
+### Agente 5 — Pipeline Multiagentes
+Pipeline completo com **5 agentes especializados** orquestrando a criação de conteúdo de nível profissional:
+
+| Agente | Responsabilidade |
+|---|---|
+| **Planejador** | Cria esboço estruturado do tema |
+| **Pesquisador** | Busca fontes no Tavily |
+| **Escritor** | Escreve o ensaio |
+| **Crítico** | Analisa e recomenda melhorias |
+| **Pesquisador de Revisão** | Busca mais fontes com base na crítica |
+
 ---
 
-## 🗺️ Arquitetura do Agente LangGraph
+## 🗺️ Arquitetura do Pipeline Multiagentes
 
 ```
-        ┌─────────────┐
-        │  __start__  │
-        └──────┬──────┘
-               ↓
-          ┌─────────┐
-    ┌────▶│   llm   │
-    │     └────┬────┘
-    │          ↓ exists_action?
-    │     ┌────┴────┐
-    │   True      False
-    │     ↓          ↓
-    │  [action]    [END]
-    └─────┘
+__start__ → planner → research_plan → generate
+                                          ↓
+                                    should_continue?
+                                    ↙           ↘
+                                  END          reflect
+                                                 ↓
+                                        research_critique
+                                                 ↓
+                                              generate
 ```
 
 ![Grafo do Agente](docs/grafo_agente.png)
@@ -55,6 +74,9 @@ Agente de pesquisa geral com busca em tempo real, construído com **LangGraph**.
 - **LangChain** — integração com LLMs e ferramentas
 - **OpenRouter** — acesso ao Gemini 2.5 Flash via API compatível com OpenAI
 - **Tavily** — busca web em tempo real para agentes de IA
+- **SQLite** — persistência de estado entre conversas
+- **Gradio** — interface web interativa
+- **BeautifulSoup + Selenium** — web scraping
 - **python-dotenv** — gerenciamento de variáveis de ambiente
 
 ---
@@ -64,27 +86,36 @@ Agente de pesquisa geral com busca em tempo real, construído com **LangGraph**.
 ```
 langgraph-agents/
 │
-├── .env.example              # Modelo de variáveis de ambiente
+├── .env.example
 ├── .gitignore
 ├── README.md
 ├── requirements.txt
 ├── docs/
-│   └── grafo_agente.png      # Visualização do grafo LangGraph
+│   ├── grafo_agente.png
+│   └── gradio_interface.png
 │
 └── src/
-    ├── main.py               # Ponto de entrada
+    ├── app.py                  # Interface Gradio
+    ├── new_backend.py          # Backend consolidado para o Gradio
+    ├── main.py                 # Ponto de entrada para testes
     ├── agents/
-    │   ├── react_agent.py    # Agente ReAct implementado manualmente
-    │   └── langgraph_agent.py # Agente com LangGraph
+    │   ├── react_agent.py      # Agente ReAct manual
+    │   ├── langgraph_agent.py  # Agente LangGraph básico
+    │   ├── persistent_agent.py # Agente com memória SQLite
+    │   └── hitl_agent.py       # Agente com Human in the Loop
     ├── config/
-    │   └── settings.py       # Configuração de clientes e APIs
+    │   └── settings.py
+    ├── multiagents/
+    │   ├── state.py            # AgentState do pipeline
+    │   ├── prompts.py          # Prompts dos 5 agentes
+    │   ├── nodes.py            # Funções de cada nó
+    │   └── graph.py            # Montagem do grafo
     ├── prompts/
-    │   ├── react_prompt.py   # Prompt do agente de inventário
-    │   └── pesquisa_prompt.py # Prompt do agente de pesquisa
     ├── state/
-    │   └── agent_state.py    # Definição do estado compartilhado
     └── tools/
-        └── inventario.py     # Ferramentas do agente de inventário
+        ├── inventario.py
+        ├── busca.py
+        └── scraping.py
 ```
 
 ---
@@ -117,13 +148,20 @@ pip install -r requirements.txt
 ```bash
 cp .env.example .env
 ```
-Edite o `.env` com suas chaves:
+Edite o `.env`:
 ```env
 OPENROUTER_API_KEY=sk-or-v1-sua_chave_aqui
 TAVILY_API_KEY=tvly-dev-sua_chave_aqui
 ```
 
-### 5. Execute
+### 5. Execute a interface Gradio
+```bash
+cd src
+py app.py
+```
+Acesse `http://127.0.0.1:7860` no navegador.
+
+### 6. Ou execute os testes em terminal
 ```bash
 py src/main.py
 ```
@@ -132,12 +170,15 @@ py src/main.py
 
 ## 💡 Conceitos demonstrados
 
-- Padrão **ReAct** (Reasoning + Acting) implementado manualmente
-- **StateGraph** do LangGraph com nós, arestas e arestas condicionais
-- **bind_tools** para registro nativo de ferramentas no modelo
-- **Streaming** vs **Invoke** — visualização do grafo em execução
+- Padrão **ReAct** implementado manualmente
+- **StateGraph** com nós, arestas e arestas condicionais
+- **bind_tools** para registro nativo de ferramentas
+- **Streaming** vs **Invoke**
 - Chamadas de ferramentas **paralelas** e **sequenciais**
-- Gerenciamento de **estado compartilhado** com `Annotated` e `operator.add`
+- **Persistência** de estado com SQLite e thread_id
+- **Human in the Loop** com interrupt_before e injeção de estado
+- **Pipeline multiagentes** com loop controlado por revisões
+- **Interface web** com Gradio e streaming em tempo real
 - Boas práticas: `.env`, `.gitignore`, estrutura modular, ambiente virtual
 
 ---
@@ -152,4 +193,6 @@ py src/main.py
 
 ---
 
-> Desenvolvido por **José João Santos Júnior** como projeto de portfólio durante os estudos de IA e agentes com LangGraph.
+> Desenvolvido por **José João Santos Júnior** como projeto de portfólio durante os estudos de Engenharia de Agentes de IA.
+>
+> LinkedIn: [linkedin.com/in/jrsantosdev1](https://linkedin.com/in/jrsantosdev1) | GitHub: [github.com/jjsjunior3](https://github.com/jjsjunior3)
