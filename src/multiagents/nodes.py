@@ -1,5 +1,8 @@
 import sys
 import os
+import json
+import re
+
 _SRC = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
@@ -32,12 +35,54 @@ class Queries(BaseModel):
     queries: list[str]
 
 
+# ─── Helper: gera queries com retry e fallback ────────────
+
+def _gerar_queries(prompt_sistema: str, conteudo: str) -> list[str]:
+    """
+    Gera queries com retry e fallback para evitar JSON truncado.
+
+    Tentativa 1: with_structured_output (ideal)
+    Tentativa 2: prompt manual com regex (fallback)
+    Tentativa 3: usa o próprio conteúdo como query (último recurso)
+    """
+    # Tentativa 1: with_structured_output
+    try:
+        queries = llm.with_structured_output(Queries).invoke([
+            SystemMessage(content=prompt_sistema),
+            HumanMessage(content=conteudo)
+        ])
+        return queries.queries
+    except Exception:
+        pass
+
+    # Tentativa 2: prompt manual pedindo JSON
+    try:
+        response = llm.invoke([
+            SystemMessage(
+                content=prompt_sistema +
+                '\nResponda APENAS com JSON válido no formato: {"queries": ["query1", "query2", "query3"]}'
+            ),
+            HumanMessage(content=conteudo)
+        ])
+        texto = response.content
+        match = re.search(r'\{.*\}', texto, re.DOTALL)
+        if match:
+            dados = json.loads(match.group())
+            return dados.get("queries", [])
+    except Exception:
+        pass
+
+    # Tentativa 3: fallback com o próprio conteúdo
+    return [conteudo[:100]]
+
+
 # ─── Nó 1: Planejador ─────────────────────────────────────
 
 def plan_node(state: AgentState) -> dict:
     """
     Recebe a tarefa e cria um esboço estruturado.
-    Escreve em: plan
+    Lê:    task
+    Escreve: plan
     """
     messages = [
         SystemMessage(content=PLAN_PROMPT),
@@ -52,20 +97,20 @@ def plan_node(state: AgentState) -> dict:
 def research_plan_node(state: AgentState) -> dict:
     """
     Gera queries com base na tarefa e busca conteúdo no Tavily.
-    Escreve em: content
+    Lê:    task, content
+    Escreve: content
     """
-    queries = llm.with_structured_output(Queries).invoke([
-        SystemMessage(content=RESEARCH_PLAN_PROMPT),
-        HumanMessage(content=state['task'])
-    ])
-
+    queries = _gerar_queries(RESEARCH_PLAN_PROMPT, state['task'])
     content = list(state.get('content') or [])
 
-    for q in queries.queries:
+    for q in queries:
         print(f"  🔍 Pesquisando: {q}")
-        response = tavily.search(query=q, max_results=2)
-        for r in response['results']:
-            content.append(r['content'])
+        try:
+            response = tavily.search(query=q, max_results=2)
+            for r in response['results']:
+                content.append(r['content'])
+        except Exception as e:
+            print(f"  ⚠️  Erro na busca: {e}")
 
     return {"content": content}
 
@@ -75,14 +120,14 @@ def research_plan_node(state: AgentState) -> dict:
 def generation_node(state: AgentState) -> dict:
     """
     Escreve o ensaio com base no plano e no conteúdo pesquisado.
-    Escreve em: draft, revision_number
+    Lê:    task, plan, content, revision_number
+    Escreve: draft, revision_number
     """
     content = "\n\n".join(state.get('content') or [])
 
     user_message = HumanMessage(
         content=f"{state['task']}\n\nEsboço:\n\n{state['plan']}"
     )
-
     messages = [
         SystemMessage(content=WRITER_PROMPT.format(content=content)),
         user_message
@@ -101,7 +146,8 @@ def generation_node(state: AgentState) -> dict:
 def reflection_node(state: AgentState) -> dict:
     """
     Analisa o rascunho e gera críticas e recomendações.
-    Escreve em: critique
+    Lê:    draft
+    Escreve: critique
     """
     messages = [
         SystemMessage(content=REFLECTION_PROMPT),
@@ -115,21 +161,21 @@ def reflection_node(state: AgentState) -> dict:
 
 def research_critique_node(state: AgentState) -> dict:
     """
-    Gera queries com base na crítica e busca mais conteúdo.
-    Escreve em: content
+    Gera queries com base na crítica e busca mais conteúdo no Tavily.
+    Lê:    critique, content
+    Escreve: content
     """
-    queries = llm.with_structured_output(Queries).invoke([
-        SystemMessage(content=RESEARCH_CRITIQUE_PROMPT),
-        HumanMessage(content=state['critique'])
-    ])
-
+    queries = _gerar_queries(RESEARCH_CRITIQUE_PROMPT, state['critique'])
     content = list(state.get('content') or [])
 
-    for q in queries.queries:
+    for q in queries:
         print(f"  🔍 Pesquisando (revisão): {q}")
-        response = tavily.search(query=q, max_results=2)
-        for r in response['results']:
-            content.append(r['content'])
+        try:
+            response = tavily.search(query=q, max_results=2)
+            for r in response['results']:
+                content.append(r['content'])
+        except Exception as e:
+            print(f"  ⚠️  Erro na busca: {e}")
 
     return {"content": content}
 

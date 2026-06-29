@@ -4,7 +4,10 @@ _SRC = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
+import sqlite3
 from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.sqlite import SqliteSaver
+
 from multiagents.state import AgentState
 from multiagents.nodes import (
     plan_node,
@@ -16,8 +19,12 @@ from multiagents.nodes import (
 )
 
 
-def build_graph():
-    """Monta e compila o grafo de multiagentes."""
+def build_graph(use_memory: bool = True):
+    """
+    Monta e compila o grafo de multiagentes.
+    use_memory=True  → persiste execuções no SQLite
+    use_memory=False → execução sem memória (mais rápido para testes)
+    """
     builder = StateGraph(AgentState)
 
     # Nós
@@ -30,17 +37,25 @@ def build_graph():
     # Ponto de entrada
     builder.set_entry_point("planner")
 
+    # Aresta condicional: generate → END ou reflect
+    builder.add_conditional_edges(
+        "generate",
+        should_continue,
+        {END: END, "reflect": "reflect"}
+    )
+
     # Arestas fixas
     builder.add_edge("planner", "research_plan")
     builder.add_edge("research_plan", "generate")
     builder.add_edge("reflect", "research_critique")
     builder.add_edge("research_critique", "generate")
 
-    # Aresta condicional: gerar → continuar ou encerrar?
-    builder.add_conditional_edges(
-        "generate",
-        should_continue,
-        {END: END, "reflect": "reflect"}
-    )
+    # Checkpointer opcional
+    if use_memory:
+        db_path = os.path.join(_SRC, "data", "checkpoints_multiagent.db")
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        conn = sqlite3.connect(db_path, check_same_thread=False)
+        memory = SqliteSaver(conn)
+        return builder.compile(checkpointer=memory)
 
     return builder.compile()
